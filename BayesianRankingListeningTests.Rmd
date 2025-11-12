@@ -1,0 +1,550 @@
+---
+title: "Bayesian Ranking and Selection for listening tests"
+output: html_document
+---
+
+# Bayesian Ranking and Selection for listening tests.
+
+This is a reinterpretation of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) on how to use Bayesian inference methods for listening tests. The main focus is on the implementation, but for our case using [R](https://www.r-project.org/) and [Stan](https://mc-stan.org/). For more detailed explanations and the logic behind all this, refer to the [post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/).\
+
+## Listening test statistics
+
+As Petteri puts it, when running a listening test, we *know* that there are some differences between the systems because we intentionally selected the systems because they are *different by nature.* Let it be different headphones, different audio codecs or any other thing. After selecting these systems, we want to then know *"how clear are the differences between systems, and quite often, which are the best systems".*
+
+If we try to analyze the data with classical statistical hypothesis testing, such as using an ANOVA, the questions we are trying to answer shift. We now have a null hypothesis (there is no differences between the systems, on average), and we hope to be able to reject this hypothesis. We then have to perform post-hoc tests to know which of the systems is the *best,* and in doing so, we need again null hypothesis that we, again, wish to reject.
+
+### Ranking and selection
+
+The **ranking and selection (R&S)** framework focuses on directly determining which system performs best and how confident we are in that conclusion, expressing results as probabilities such as “system 3 is best with 96.3% probability.”
+
+Combining R&S with Bayesian inference the (Bayesian R&S approach) already used in fields like operations research and machine learning.
+
+Applying Bayesian R&S to listening tests like MUSHRA can make the analysis more more informative, efficient, and intuitive.
+
+## The MUSHRA test
+
+The “**Mu**lti **S**timulus test with **H**idden **R**eference and **A**nchor (**MUSHRA**)” is specified in [ITU-R BS.1534-3](https://www.itu.int/rec/R-REC-BS.1534-3-201510-I) and it is used very widely in audio research in general. It is intended for intermediate-quality systems evaluation, like performance of audio codecs but its use has spread a lot in the audio community.
+
+For a more detailed explanation of the test, refer to [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) and the ITU standard, freely available [here](https://www.itu.int/rec/R-REC-BS.1534-3-201510-I).
+
+## Example data
+
+I manually created some data that resembles approximately the distribution in [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/).
+
+```{r}
+library(tidyverse)
+library(MCMCpack)
+
+# Ratings matrix (15 participants × 6 systems)
+ratings <- matrix(c(
+  rep(100, 15),                                                  # System 1
+  100, 92, 87, 80, 81, 77, 75, 76, 70, 69, 63, 61, 58, 48, 17,   # System 2
+  93, 80, 81, 81, 79, 78, 76, 70, 65, 59, 53, 47, 43, 38, 20,    # System 3
+  60, 63, 40 ,31, 30, 27, 24, 24, 18 , 11, 8, 7, 0, 0, 0,        # System 4
+  40, 20, 19, 17, 16, 13, 9, 8, 7, 0, 0, 0, 0, 0, 0,             # System 5
+  40, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0                  # System 6
+), ncol = 6, byrow = FALSE)
+
+# Randomize the rating rows
+set.seed(42)  # for reproducibility
+ratings <- ratings[sample(nrow(ratings)), ]
+
+participants <- rep(1:nrow(ratings), each = ncol(ratings))
+systems <- rep(1:ncol(ratings), times = nrow(ratings))
+
+# Build dataframe
+df <- data.frame(
+  ratings = as.vector(t(ratings)),
+  systems = as.factor(systems),
+  listeners = participants
+)
+
+# Plot
+ggplot(df, aes(x = systems, y = ratings, color = systems)) +
+  geom_jitter(width = 0.1, size = 2) +
+  labs(x = "System", y = "Rating", title = expression(Ratings~r[kj])) +
+  scale_y_continuous( breaks = c(0, 20, 40, 60, 80, 100))+
+  theme_minimal()
+```
+
+## Hierarchical Bayesian model
+
+The participant responses $r_{kj}$ can be modeled as samples from a Beta distribution. Why the Beta distribution? It is bounded to [0,1] as opposed to a normal distribution that covers the full real line.
+
+Since we assumed that the systems are different, we can allow for those differences in the model by making the responses come from different beta distributions with different parameters $\alpha_j$ and $\beta_j$.
+
+We can then paramterize $\alpha_j = \mu_j\phi_j$ and $\beta_j = (1-\mu_j)\phi_j$
+
+In this way, $\mu_j$ is the $j$th system mean and $\phi_j$ the precision of the distribution, similar to $\tau$ in a normal distribution.
+
+We can restrict the mean to the [0,1] interval by modelling $\mu_j$ as a logit-normally distributed random variable. In the model, $\mu_0$ is the average system wide mean, and $\alpha_j$ models the deviation from such mean by system $j$. Finally, $\sigma_{\alpha}^2$ describes the uncertainty in the systems' means on the logit scale, and we give $\phi_j$ a Gamma prior.00
+
+The complete model reads:
+
+$$
+\begin{align*}
+y_{kj} &\sim \operatorname{Beta}(\mu_j\phi_j, (1-\mu_j)\phi_j), \\
+\operatorname{logit}(\mu_j) &= \mu_0 + \alpha_j, \\
+\mu_0 &= \mathcal{N}(0,1), \\
+\alpha_j &= \mathcal{N}(0, \sigma_{\alpha}^2), \\
+\sigma_{\alpha}^2 &= \operatorname{Inv-Gamma}(3,1), \\
+\phi_j &= \operatorname{Gamma}(2,0.1)
+\end{align*}
+$$
+
+How does all this relate to Bayesian inference? In Bayesian inference, the *joint posterior distribution* $p(\boldsymbol{\theta} , \boldsymbol{\eta} | \boldsymbol{y} )$ is derived as:
+
+$$
+p(\boldsymbol{\theta} , \boldsymbol{\eta} | \boldsymbol{y}) \propto p(\boldsymbol{\eta})p(\boldsymbol{\theta | \eta}) p(\boldsymbol{y | \theta})
+$$
+
+$\boldsymbol{\theta}$ is the parameters of the model: $\mu_j, \mu_0, \alpha_j$ and $\phi_j$.
+
+$\boldsymbol{\eta}$ are the hyperparameters that describe the distributions of the parameters,$\sigma_{\alpha}^2$ in our case.
+
+$\boldsymbol{y}$ is the observations vector.
+
+### Prior predictive checks
+
+Lets draw samples from the prior and hyperprior distributions to check if our model expectations are reasonable:
+
+```{r}
+
+N <- 10000
+set.seed(123)
+
+prior_samples <- tibble(
+  mu0 = rnorm(N, 0, 1),
+  sigma_alpha = rinvgamma(N,3),
+  phi_j = rgamma(N,10)
+) %>% 
+  mutate(
+    alpha_j = rnorm(N,0,sigma_alpha),
+    mu_j = plogis(mu0 + alpha_j)
+  ) %>% 
+  # Finally draw values for y based on the priors
+  mutate(
+    y_kj = rbeta(N, mu_j * phi_j, (1 - mu_j) * phi_j)
+  )
+
+```
+
+To replicate the plot in [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/)
+
+```{r}
+library(patchwork)
+
+
+N <- 1000
+
+# Taking the first 15 from our simulation
+mu_j <- prior_samples$mu_j[1:15]
+phi_j <-  prior_samples$phi_j[1:15]
+
+# If you want to see the exact same distributions in the blog post plot, you can uncomment the following
+# mu_j <- c(.2, .77, .56, .23, .35, .84, .12, .12, .71, .31, .32, .49, .88, .38, .52)
+# phi_j <- c(20.39, 3.81, 9.18, 26.19, 2.45, 14.05, 8.26, 19.7, 3.95, 16.20, 30.90, 16.68, 10.45, 40.19, 50.2)
+
+
+plots <- lapply(1:15, function(i) {
+  y_fix <- rbeta(N, mu_j[i] * phi_j[i], (1 - mu_j[i]) * phi_j[i])
+  df <- data.frame(y = y_fix)
+  
+  ggplot(df, aes(x = y)) +
+    geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "#66c2a5", color = "#66c2a5") +
+    coord_cartesian(xlim = c(-0.01, 1.01), ylim = c(0, 5)) +
+    scale_x_continuous(breaks = c(0, 1)) +
+    theme_minimal(base_size = 8) +
+    theme(
+      axis.title = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      plot.title = element_text(size = 8),
+      panel.grid = element_blank()
+    ) +
+    ggtitle(bquote(mu[j] == .(round(mu_j[i], 2)) ~ ", " ~ phi[j] == .(round(phi_j[i], 2))))
+})
+
+wrap_plots(plots, ncol = 5)
+
+
+```
+
+Check the predictive priors:
+
+```{r}
+
+p1 <- ggplot(prior_samples, aes(x = mu_j)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "#66c2a5", color = "white") +
+  labs(title = expression("Prior predictive distribution for " * mu[j])) +
+  theme_minimal(base_size = 9) +
+  theme(panel.grid = element_blank())
+
+# Second plot: y_kj
+p2 <- ggplot(prior_samples, aes(x = y_kj)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "#66c2a5", color = "white") +
+  labs(title = expression("Prior predictive distribution for " * y[kj])) +
+  theme_minimal(base_size = 9) +
+  theme(panel.grid = element_blank())
+
+p1 + p2
+
+```
+
+### Stan implementation
+
+The model in the file `model.stan` implements the model explained at the beginning with stan syntax.
+
+### Model fitting
+
+Using the library `rstan` we can fit the model as shown. We specify four chains and 5000 iterations for warm-up and 5000 iterations for the sampling of the 4 chains.
+
+```{r}
+
+library(rstan)
+
+eps <- 0.5
+stan_data <- list(
+  N = nrow(df),
+  S = length(levels(df$systems)),
+  system_id = as.integer(df$systems),
+  y = (df$ratings + eps) / (100 + 2 * eps)   # safely map to (0,1)
+)
+
+# Compile and fit the model
+fit <- stan(
+  file = "model.stan",
+  data = stan_data,
+  warmup = 5000,
+  iter = 10000, # 5000 warmup + 5000 sampling
+  chains = 4)
+
+```
+
+After the simulation
+
+1.  Check that the chains have converged to the same values for the parameters:\
+    This is indicated by `R_hat`. Properly mixed chains will have an `Rhat` of less than 1.
+
+```{r}
+df_summary <- as.data.frame(summary(fit, digits = 2)$summary)
+head(df_summary, 15)
+```
+
+For the following plot we need the `bayesplot` library. We are visualizing here the draws of each of the chains for each parameter and the density of such draws. Note that for $\mu_0$ and $\sigma^2_\alpha$ the colors are the different chains while for the rest of parameters, the colors represent each system.\
+
+```{r}
+library(bayesplot)
+
+posterior <- as.array(fit)
+df_traces <- mcmc_trace_data(
+  posterior,
+  pars = c("mu_0", "sigma_alpha"),
+  regex_pars = c("phi_j", "alpha_j", "eta")
+  )
+```
+
+```{r fig.width=10, fig.height=20, dpi=300}
+
+p_dens_mu <- df_traces %>%
+  filter(parameter== "mu_0") %>%
+  ggplot(aes(
+    x = value,
+    color = chain,
+    fill = chain
+  )) +
+  geom_density(alpha = 0.1) +
+  labs(x = expression(mu[0]), y = "Density", color = "Chains", fill = "Chains") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+  )
+
+p_trace_mu <- df_traces %>%
+  filter(parameter == "mu_0") %>%
+  ggplot(aes(
+    x = iteration,
+    y = value,
+    color = chain
+  )) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  labs(x = "Iteration", y = expression(mu[0]), color = "Chain") +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+
+p_dens_sigma <- df_traces %>%
+  filter(parameter== "sigma_alpha") %>%
+  ggplot(aes(
+    x = value,
+    color = chain,
+    fill = chain
+  )) +
+  geom_density(alpha = 0.1) +
+  labs(x = expression(sigma[alpha]^2), y = "Density", color = "Chains", fill = "Chains") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+  )
+
+p_trace_sigma <- df_traces %>%
+  filter(parameter == "sigma_alpha") %>%
+  ggplot(aes(
+    x = iteration,
+    y = value,
+    color = chain
+  )) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  labs(x = "Iteration", y = expression(sigma[alpha]^2), color = "Chain") +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+
+
+p_dens_phi <- df_traces %>%
+  filter(grepl("^phi_j", parameter)) %>%
+  ggplot(aes(
+    x = value,
+    color = parameter,
+    fill = parameter
+  )) +
+  geom_density(alpha = 0.1) +
+  labs(x = expression(phi[j]), y = "Density", color = "Parameter", fill = "Parameter") +
+  theme_minimal() +
+  theme(
+    legend.position = "none"
+  )
+
+p_trace_phi <- df_traces %>%
+  filter(grepl("^phi_j", parameter)) %>%
+  ggplot(aes(
+    x = iteration,
+    y = value,
+    color = parameter,
+  )) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  labs(x = "Iteration", y = expression(phi[j]), color = "Parameter") +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+
+p_dens_alpha <- df_traces %>%
+  filter(grepl("^alpha_j", parameter)) %>%
+  ggplot(aes(
+    x = value,
+    color = parameter,
+    fill = parameter
+  )) +
+  geom_density(alpha = 0.1) +
+  labs(x = expression(alpha[j]), y = "Density", color = "Parameter", fill = "Parameter") +
+  theme_minimal() +
+  theme(
+    legend.position = "none"
+  )
+
+p_trace_alpha <- df_traces %>%
+  filter(grepl("^alpha_j", parameter)) %>%
+  ggplot(aes(
+    x = iteration,
+    y = value,
+    color = parameter
+  )) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  labs(x = "Iteration", y = expression(alpha[j]), color = "Parameter") +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+
+
+# Identify each eta number with each system
+eta_df <- df_traces %>%
+  filter(str_detect(parameter, "^eta")) %>%
+  mutate(index = as.integer(str_extract(parameter, "\\d+"))) %>%
+  left_join(
+    data.frame(index = 1:length(stan_data$system_id),
+               system = factor(stan_data$system_id)),
+    by = "index"
+  ) %>%
+  mutate(parameter = paste0("eta_system", system))
+
+
+p_trace_eta <- eta_df %>%
+  ggplot(aes(
+    x = iteration,
+    y = value,
+    color = system,
+    group = interaction(chain, index)
+  )) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  labs(x = "Iteration", y = expression(eta[n]), color = "System") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+
+p_dens_eta <- eta_df %>%
+  ggplot(aes(x = value, color = system, fill = system)) +
+  geom_density(alpha = 0.1) +
+  labs(x = expression(eta[n]), y = "Density", color = "System", fill = "System") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+(p_dens_mu | p_trace_mu) /
+(p_dens_sigma | p_trace_sigma) /
+(p_dens_alpha | p_trace_alpha) /
+(p_dens_phi | p_trace_phi) /
+(p_dens_eta | p_trace_eta)
+```
+
+## Posterior analysis
+
+### Posterior predictive checks
+
+We want to check that the output of the model makes sense and that the posterior parameter distributions have not converged to some strange combination of parameters.
+
+There are a few ways of doing this:
+
+-   Simulate the predicted output $\tilde{y}$ for each draw of the parameters.
+
+-   Use point estimates of the parameter distributions to get an idea of the estimated output.
+
+In this case we will use the mean as the point estimate for each parameter.
+
+```{r}
+# Extract draws
+phi_draws   <- posterior::as_draws_df(fit) %>% dplyr::select(starts_with("phi_j"))
+alpha_draws <- posterior::as_draws_df(fit) %>% dplyr::select(starts_with("alpha_j"))
+mu0_draws   <- posterior::as_draws_df(fit)$mu_0
+
+# mu_draws = inv_logit(mu0 + alpha_j)
+mu_draws <- plogis(mu0_draws + as.matrix(alpha_draws))
+
+point_estimates <- tibble(
+  system = 1:ncol(mu_draws),
+  mu_i = colMeans(mu_draws),
+  phi_i = colMeans(phi_draws)
+  ) %>% 
+  mutate(
+    a = mu_i * phi_i,
+    b = (1 - mu_i) * phi_i
+  )
+
+df_pred <- point_estimates %>% 
+  rowwise() %>%
+  mutate(
+    x = list(seq(1, 99, length.out = 100)),
+    y = list(dbeta(x / 100, a, b) / max(dbeta(x / 100, a, b)))
+  ) %>% 
+  unnest(c(x, y))
+
+# Plot the densities
+ggplot(df_pred, aes(x = x, y = y, color = factor(system), fill = factor(system))) +
+  geom_line(linewidth = 0.6, show.legend = FALSE) +
+  geom_area(alpha = 0.3, color = NA) +
+  geom_jitter(
+    data = df %>% mutate(y = rep(0, n()), system = factor(systems)),
+    aes(x = ratings, y = y, color = system),
+    width = 0,
+    height = 0.01,  
+    size = 1.5,
+    alpha = 0.8,
+    show.legend = FALSE
+  ) +
+  labs(
+    x = "Rating",
+    y = "Density (scaled)",
+    fill = "System",
+    title = expression("Posterior predictive distributions " ~ p(tilde(y)~"|"~bold(y)))
+  ) +
+  facet_wrap(~system)+
+  coord_cartesian(xlim = c(0, 100)) +
+  theme_minimal(base_size = 11)
+
+```
+
+This plot shows that the estimated distributions and the points observed overlap very nicely. The beta distribution makes it so that when many observations are close to the edge, the distribution is *pulled* towards the extremes.
+
+### RSS with posteriors
+
+Since Ranking and Selection consists in comparing the parameters of the different systems and we have just estimated exactly that (our posterior), the only thing left to do is such comparison to get which ouf our systems is performing better and how much.
+
+Following the example described by [Petteri](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/), lets look at the posterior distributions of the parameter `mu_j`
+
+```{r}
+ggplot() +
+  geom_density(aes(x = mu_draws[,1], color = "System 1"), alpha = 0.5, linewidth = 1) +
+  geom_density(aes(x = mu_draws[,2], color = "System 2"), alpha = 0.5, linewidth = 1) +
+  geom_density(aes(x = mu_draws[,3], color = "System 3"), alpha = 0.5, linewidth = 1) +
+  geom_density(aes(x = mu_draws[,4], color = "System 4"), alpha = 0.5, linewidth = 1) +
+  geom_density(aes(x = mu_draws[,5], color = "System 5"), alpha = 0.5, linewidth = 1) +
+  geom_density(aes(x = mu_draws[,6], color = "System 6"), alpha = 0.5, linewidth = 1) +
+ 
+  labs(
+    x = expression(mu[j]),
+    y = "Density",
+    color = "System",
+    title = expression("Posterior densities of " * mu[j])
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.y = element_blank())
+```
+
+Note that system 1 and 6 are excluded from the analysis of which one is the best system as they are the reference and anchor respectively.
+
+To get the best system, we can directly look at the distribution plot. It seems that system 2 has more probability mass than the others. But to know for sure and by how much, we can compute the probability $Pr(\mu_2 > max_{j \notin \{1,2\}} \mu_j)$, which is to say, in how many samples from the posterior is the value of $\mu_2$ the highest ranked (excluding system 1), divided by the number of samples.
+
+```{r}
+# Get the draws for system 2, 3, 4 and 5 and get the max (which.max) over the rows. This returns the index, add one to get the system number.
+best_system <- apply(mu_draws[, 2:5], 1, which.max) + 1
+
+# Get counts
+counts <- table(best_system)
+
+# Prop.table gives the proportion from the count table
+best_system_prob <- prop.table(counts)
+
+for (v in names(best_system_prob)) {
+  cat(sprintf(" Probability of System %s being the best system: %.1f%%\n",
+              v, 100 * best_system_prob[[v]]))
+}
+```
+
+This way we can say that we are 83.2% confident that the system 2 is the best in this scenario. There is no statistical testing, it is up to us to decide how much evidence we need for the result to be credible enough.
+
+The result also shows that we are highly confident that either 2 or 3 are the best systems, with 100% of the posterior draws of $\mu_2$ being the highest from either of those systems.
+
+### Indifference-zone R&S 
+
+The idea behind an *indifference-zone* is that, for example, ratings that differ less that 5 points on a MUSHRA scale are can be considered as basically the same. So we can focus only on differences that are larger than this threshols. The section on *indifference-zones* of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) explains it best.
+
+For our example we take $\delta_{IZ} = 5$ , so differences of less than 5 points are indifferent.
+
+```{r}
+delta_IZ <- 5 / 100
+
+# For wich indeces, the difference is greater than the indifference zone
+idxs <- which(abs(mu_draws[,2] - mu_draws[,3]) > delta_IZ)
+
+# Only taking those into account, compute the probability
+p_IZ_2 <- 100 * mean(mu_draws[idxs,2] > mu_draws[idxs,3])
+cat(sprintf("p_IZ,2 = %.1f%%\n", p_IZ_2))
+```
+
+The probability of the second system is now greater, using the indifference zones:
+
+> Here we are only interested in being correct, *if* the real mean difference between systems is at least 5 points. If it would turn out to be less than 5 points, then we don’t really care which system is labeled as best.
+
+## Wrapping up
+
+-   Using Bayesian methods for R&S analysis makes a lot of sense, especially considering that we can incorporate prior knowledge in the model, instead of taking a null hypothesis that assumes all systems to have no differences when we intentionally introduced differences.
+
+-   This can be also applied for listening test optimization, discarding systems that perform poorly early on, focusing our time in obtaining the best systems.
+
+-   Finally, the Bayesian approach allows for a lot of flexibility and interpretability of our results.
+
+    Big thanks to Pettery Hyvärinen for making this post in the first place!
