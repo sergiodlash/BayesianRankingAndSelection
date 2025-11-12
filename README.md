@@ -2,6 +2,8 @@
 
 Repository contains a reinterpretation of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) on how to use Bayesian inference methods for listening tests. The main focus is on the implementation, but for our case using [R](https://www.r-project.org/) and [Stan](https://mc-stan.org/). For more detailed explanations, refer to the [post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/).
 
+Follow the html render here: https://sergiodlash.github.io/BayesianRankingAndSelection/
+
 Files:
 
 - `index.html` — rendered HTML report
