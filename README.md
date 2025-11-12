@@ -4,7 +4,7 @@ Repository contains a reinterpretation of [Petteri Hyvärinen's post](https://pe
 
 Files:
 
-- `BayesianRankingListeningTests.html` — rendered HTML report
+- `index.html` — rendered HTML report
 - `2025_BayesianRanking.Rproj` — RStudio project file
 - `BayesianRankingListeningTests.Rmd` — RMarkdown notebook
 - `model.stan` — Stan model source

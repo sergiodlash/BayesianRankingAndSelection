@@ -31,7 +31,7 @@ For a more detailed explanation of the test, refer to [Petteri Hyvärinen's post
 
 I manually created some data that resembles approximately the distribution in [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/).
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(MCMCpack)
 
@@ -131,9 +131,8 @@ prior_samples <- tibble(
 
 To replicate the plot in [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/)
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(patchwork)
-
 
 N <- 1000
 
@@ -166,8 +165,6 @@ plots <- lapply(1:15, function(i) {
 })
 
 wrap_plots(plots, ncol = 5)
-
-
 ```
 
 Check the predictive priors:
@@ -199,7 +196,7 @@ The model in the file `model.stan` implements the model explained at the beginni
 
 Using the library `rstan` we can fit the model as shown. We specify four chains and 5000 iterations for warm-up and 5000 iterations for the sampling of the 4 chains.
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 
 library(rstan)
 
@@ -233,7 +230,7 @@ head(df_summary, 15)
 
 For the following plot we need the `bayesplot` library. We are visualizing here the draws of each of the chains for each parameter and the density of such draws. Note that for $\mu_0$ and $\sigma^2_\alpha$ the colors are the different chains while for the rest of parameters, the colors represent each system.\
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(bayesplot)
 
 posterior <- as.array(fit)
@@ -518,7 +515,7 @@ This way we can say that we are 83.2% confident that the system 2 is the best in
 
 The result also shows that we are highly confident that either 2 or 3 are the best systems, with 100% of the posterior draws of $\mu_2$ being the highest from either of those systems.
 
-### Indifference-zone R&S 
+### Indifference-zone R&S
 
 The idea behind an *indifference-zone* is that, for example, ratings that differ less that 5 points on a MUSHRA scale are can be considered as basically the same. So we can focus only on differences that are larger than this threshols. The section on *indifference-zones* of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) explains it best.
 
@@ -548,3 +545,8 @@ The probability of the second system is now greater, using the indifference zone
 -   Finally, the Bayesian approach allows for a lot of flexibility and interpretability of our results.
 
     Big thanks to Pettery Hyvärinen for making this post in the first place!
+
+```{r}
+# Use this to render the markdown file to HTML
+# rmarkdown::render("BayesianRankingListeningTests.Rmd", output_file = "index.html")
+```
