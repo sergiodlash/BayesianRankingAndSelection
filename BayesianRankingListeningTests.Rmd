@@ -6,6 +6,8 @@ output: html_document
 # Bayesian Ranking and Selection for listening tests.
 
 This is a reinterpretation of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) on how to use Bayesian inference methods for listening tests. The main focus is on the implementation, but for our case using [R](https://www.r-project.org/) and [Stan](https://mc-stan.org/). For more detailed explanations and the logic behind all this, refer to the [post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/).\
+\
+The R code for this example can be found [HERE](https://github.com/sergiodlash/BayesianRankingAndSelection), with the Stan model and the RMarkdown file.\
 
 ## Listening test statistics
 
@@ -517,9 +519,9 @@ The result also shows that we are highly confident that either 2 or 3 are the be
 
 ### Indifference-zone R&S
 
-The idea behind an *indifference-zone* is that, for example, ratings that differ less that 5 points on a MUSHRA scale are can be considered as basically the same. So we can focus only on differences that are larger than this threshols. The section on *indifference-zones* of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) explains it best.
+The idea behind an *indifference-zone* is that, for example, ratings that differ less that 5 points on a MUSHRA scale are can be considered as basically the same. So we can focus only on differences that are larger than this thresholds. The section on *indifference-zones* of [Petteri Hyvärinen's post](https://petterihyvarinen.fi/blog/posts/bayesian-mushra/) explains it best.
 
-For our example we take $\delta_{IZ} = 5$ , so differences of less than 5 points are indifferent.
+For our example we take $\delta_{IZ} = 5$ , so differences of less than 5 points are indifferent for us.
 
 ```{r}
 delta_IZ <- 5 / 100
